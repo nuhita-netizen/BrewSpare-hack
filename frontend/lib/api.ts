@@ -15,3 +15,9 @@ export async function postApi<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
   return res.json();
 }
+
+export async function putApi<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+  return res.json();
+}

@@ -5,7 +5,7 @@ from math import ceil
 from statistics import mean
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .models import Asset, SparePart, PartUsage, SensorReading
+from .models import Asset, SparePart, PartUsage, SensorReading, Plant
 
 STATUS_ORDER = {"GREEN": 0, "YELLOW": 1, "ORANGE": 2, "RED": 3}
 
@@ -37,7 +37,8 @@ def availability_for(db: Session, part: SparePart) -> dict:
     effective_lead = int(round(part.lead_time_days * (1.0 + max(0, 0.95 - part.supplier_reliability))))
     gap = effective_lead + safety_buffer - predicted_need_days
     months_cover = usable / max(part.avg_monthly_usage, 0.01)
-    carrying_cost = part.current_stock * part.unit_cost * 0.22
+    plant = db.scalar(select(Plant).where(Plant.id == part.asset_links[0].asset.plant_id)) if part.asset_links else db.scalar(select(Plant).limit(1))
+    carrying_cost = part.current_stock * part.unit_cost * (plant.carrying_rate if plant else 0.22)
 
     if part.shelf_life_months and part.inventory_age_months >= part.shelf_life_months * 0.9:
         state = "SHELF_LIFE_RISK"

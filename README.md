@@ -1,27 +1,19 @@
-<<<<<<< HEAD
 # BrewSpare
 
 BrewSpare is a local-first brewery maintenance and spare-parts planning website. It connects machine condition, maintenance history, spare-part demand, supplier lead time, inventory carrying cost, and procurement timing into one decision-support workflow.
 
-## Target device
-Designed for the supplied Windows x64 laptop:
-- Intel Core Ultra 7 155H
-- 32 GB RAM
-- Intel Arc integrated graphics
-- ~675 GB free storage
-
-No dedicated GPU is required.
-
 ## Architecture
-- Frontend: Next.js + React + TypeScript
-- Backend: FastAPI + SQLAlchemy
-- Database: SQLite by default for one-command local demo; PostgreSQL is supported through `DATABASE_URL`
-- Analytics: deterministic demand forecast, maintenance-risk logic, availability planning, scenario analysis
+
+- Frontend: Next.js, React, and TypeScript
+- Backend: FastAPI and SQLAlchemy
+- Database: SQLite by default; PostgreSQL is supported through `DATABASE_URL`
+- Analytics: deterministic demand forecasts, maintenance-risk logic, availability planning, and scenario analysis
 
 ## Quick start on Windows
 
-### 1. Backend
-Open PowerShell in `backend`:
+### Backend
+
+In PowerShell, from `backend`:
 
 ```powershell
 python -m venv .venv
@@ -32,11 +24,11 @@ python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```
 
-Backend: http://localhost:8000
-API docs: http://localhost:8000/docs
+Backend: http://localhost:8000 · API docs: http://localhost:8000/docs
 
-### 2. Frontend
-Open a second PowerShell window in `frontend`:
+### Frontend
+
+In a second PowerShell window, from `frontend`:
 
 ```powershell
 npm install
@@ -47,23 +39,21 @@ npm run dev
 Website: http://localhost:3000
 
 ## Optional PostgreSQL
-The app defaults to SQLite so it starts immediately on one laptop. To use PostgreSQL, create a database and set:
+
+Set `DATABASE_URL`, for example:
 
 ```env
 DATABASE_URL=postgresql+psycopg://brewspare:brewspare@localhost:5432/brewspare
 ```
 
-Then rerun `python -m app.seed`.
+Then run `python -m app.seed` from `backend`.
 
-## Main user journeys
+## Main demo journeys
+
 1. Plant Command Center → select FL-01 Bottle Filler → review risk and required parts.
-2. FL-01 → SP-010 Filler Valve Seal Kit → see future-availability gap and procurement timing.
-3. Procurement Planner → create a local approval/planning record. No external purchase is claimed.
-4. Inventory → identify SP-015 as slow-moving/excess inventory and review carrying-cost exposure.
+2. FL-01 → SP-010 Filler Valve Seal Kit → see future availability and procurement timing.
+3. Procurement Planner → create a local planning record. No external purchase is placed.
+4. Inventory → identify SP-015 as slow-moving or excess inventory.
 5. Scenario Simulator → model supplier delay and production increase.
 
-## Demo data
-All plant, financial, maintenance and sensor values are synthetic and intended for product demonstration only.
-=======
-# BrewSpare-hack
->>>>>>> 09c19deeeb7cbfcbb579f620fe98b369c54197bf
+All plant, financial, maintenance, and sensor values are synthetic and intended for product demonstration only.

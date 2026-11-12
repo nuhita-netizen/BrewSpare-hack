@@ -3,6 +3,7 @@ import { useEffect,useMemo,useState } from "react";
 import PlantMap from "@/components/PlantMap";
 import StatusBadge,{colorFor} from "@/components/StatusBadge";
 import Sparkline from "@/components/Sparkline";
+import ProjectChat from "@/components/ProjectChat";
 import { api } from "@/lib/api";
 
 type Asset={asset_code:string;name:string;area:string;status:string;risk_score:number;health_score:number;x:number;y:number};
@@ -12,8 +13,9 @@ type Detail={asset_code:string;name:string;health_score:number;risk_score:number
 
 const money=(n:number)=>`₹${(n/100000).toFixed(1)}L`;
 export default function Home(){
- const [data,setData]=useState<Summary|null>(null),[selected,setSelected]=useState("FL-01"),[detail,setDetail]=useState<Detail|null>(null),[err,setErr]=useState("");
+ const [data,setData]=useState<Summary|null>(null),[selected,setSelected]=useState("FL-01"),[detail,setDetail]=useState<Detail|null>(null),[partsByAsset,setPartsByAsset]=useState<Record<string,Part[]>>({}),[err,setErr]=useState("");
  useEffect(()=>{api<Summary>("/plant-summary").then(setData).catch(e=>setErr(e.message))},[]);
+ useEffect(()=>{api<Detail[]>("/assets").then(rows=>setPartsByAsset(Object.fromEntries(rows.map(a=>[a.asset_code,a.parts])))).catch(()=>{})},[]);
  useEffect(()=>{api<Detail>(`/assets/${selected}`).then(setDetail).catch(()=>{})},[selected]);
  const sensors=detail?.latest_sensor;
  const mockSeries=useMemo(()=>Array.from({length:14},(_,i)=>4.4+i*.25+Math.sin(i)*.35),[]);
@@ -31,7 +33,7 @@ export default function Home(){
     <div className="metric"><div className="value">{money(data.avoidable_inventory_value)}</div><div className="label">Avoidable Inventory Value</div></div>
    </section>
    <section className="hero">
-    <PlantMap assets={data.assets} selected={selected} onSelect={a=>setSelected(a.asset_code)}/>
+    <PlantMap assets={data.assets} partsByAsset={partsByAsset} selected={selected} onSelect={a=>setSelected(a.asset_code)}/>
     <aside className="sidepanel">
       <div className="panel-head"><div><span className="subtle">Selected asset</span><h3>{detail?.asset_code} · {detail?.name}</h3></div><span className={`tag ${(detail?.status||"green").toLowerCase()}`}>{detail?.status||"Loading"}</span></div>
       <div><div className="kv"><span>Health Score</span><b>{detail?.health_score ?? "—"}%</b></div><div className="kv"><span>Predictive Risk</span><b style={{color:colorFor(detail?.status||"")}}>{detail?.risk_score ?? "—"}%</b></div><div className="kv"><span>Next Maintenance</span><b>{detail?.next_maintenance_days ?? "—"} days</b></div></div>
@@ -51,6 +53,6 @@ export default function Home(){
     <div className="card"><h3>Critical Assets</h3>{data.critical_assets.map(a=><a className="asset-row" href={`/assets/${a.asset_code}`} key={a.asset_code}><i className="row-dot" style={{background:colorFor(a.status)}}/><div><div className="row-title">{a.asset_code} · {a.name}</div><div className="row-meta">Health {a.health_score}%</div></div><div className="row-risk" style={{color:colorFor(a.status)}}>{a.risk_score}%</div></a>)}</div>
     <div className="card"><h3>Parts to Order</h3>{data.parts_to_order.map(p=><a href={`/spare-parts/${p.part_code}`} className="part-row" key={p.part_code}><i className="row-dot" style={{background:colorFor(p.state)}}/><div><div className="row-title">{p.part_code}</div><div className="row-meta">{p.part_name} · Stock {p.usable_stock} · Need {p.forecast.d30}</div></div><div className="row-risk">Order {p.recommended_order_qty}</div></a>)}</div>
    </section>
-   <div className="ai-bar"><span style={{color:"var(--blue)",fontSize:20}}>✦</span><input className="ai-input" placeholder="Ask BrewSpare AI… e.g. ‘What should we order this week?’"/><span className="chip">What needs attention today?</span><span className="chip">Which parts are at risk?</span><a className="btn" href="/ai-insights">Ask</a></div>
+   <ProjectChat/>
  </div>
 }

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import re
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
 from .models import Asset, SparePart, Plant, SensorReading, ProcurementPlan
+from .models import MaintenanceEvent
 from .analytics import asset_detail, availability_for
 from .seed import seed
 
@@ -22,6 +24,23 @@ def startup():
 @app.get("/health")
 def health():
     return {"status":"ok","service":"BrewSpare API"}
+
+@app.get("/api/settings")
+def get_settings(db: Session = Depends(get_db)):
+    plant = db.scalar(select(Plant).limit(1))
+    return {"carrying_rate": plant.carrying_rate if plant else 0.22, "currency": "INR (₹)", "safety_buffer_days": 7}
+
+class SettingsIn(BaseModel):
+    carrying_rate: float = Field(ge=0, le=1)
+
+@app.put("/api/settings")
+def update_settings(payload: SettingsIn, db: Session = Depends(get_db)):
+    plant = db.scalar(select(Plant).limit(1))
+    if not plant:
+        raise HTTPException(404, "Plant not found")
+    plant.carrying_rate = payload.carrying_rate
+    db.commit()
+    return {"carrying_rate": plant.carrying_rate, "currency": "INR (₹)", "safety_buffer_days": 7}
 
 @app.get("/api/plant-summary")
 def plant_summary(db: Session = Depends(get_db)):
@@ -133,4 +152,99 @@ def ai_brief(db: Session = Depends(get_db)):
         "summary": f"Risk score is {top['risk_score']} with health at {top['health_score']}%. {len(parts)} spare parts currently need procurement review.",
         "evidence": [f"{p['part_code']} has {p['usable_stock']} usable units vs {p['forecast']['d30']} forecast 30-day demand" for p in parts[:3]],
         "suggested_actions": ["Review FL-01 maintenance history","Review SP-010 procurement window","Check high-risk supplier lead times"],
+    }
+
+class ProjectQuestion(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+
+OUT_OF_SCOPE = "I can only help with BrewSpare project data: brewery assets, spare parts, stock, forecasts, availability, suppliers, maintenance, procurement, and scenarios. Try asking about an asset code (for example FL-01) or a part code (for example SP-010)."
+
+@app.post("/api/ask")
+def ask_project(payload: ProjectQuestion, db: Session = Depends(get_db)):
+    question = payload.question.strip()
+    if not question:
+        return {"in_scope": False, "answer": OUT_OF_SCOPE}
+    q = question.lower()
+    # This endpoint intentionally uses fixed, data-backed answers. It has no general-purpose model.
+    blocked = r"\b(joke|poem|story|recipe|weather|politics|celebrity|movie|song|translate|homework|code me|write me|ignore (?:all )?(?:previous|prior)|act as|general knowledge)\b"
+    if re.search(blocked, q):
+        return {"in_scope": False, "answer": OUT_OF_SCOPE}
+
+    part_match = re.search(r"\bSP[- ]?(\d{3})\b", question.upper())
+    asset_match = re.search(r"\b([A-Z]{2,5}-\d{2})\b", question.upper())
+    project_terms = ("brewspare", "brewery", "plant", "asset", "machine", "spare", "part", "stock", "inventory", "forecast", "demand", "order", "procurement", "supplier", "lead time", "maintenance", "downtime", "risk", "availability", "sensor", "scenario", "production", "overstock", "carrying cost", "critical")
+    if not part_match and not asset_match and not any(term in q for term in project_terms):
+        return {"in_scope": False, "answer": OUT_OF_SCOPE}
+
+    if part_match:
+        code = f"SP-{part_match.group(1)}"
+        part = db.scalar(select(SparePart).where(SparePart.part_code == code))
+        if not part:
+            return {"in_scope": True, "answer": f"I couldn't find part {code} in the BrewSpare dataset."}
+        av = availability_for(db, part)
+        linked = ", ".join(link.asset.asset_code for link in part.asset_links) or "no linked assets"
+        return {"in_scope": True, "answer": f"{code} · {part.name}: {av['state'].replace('_', ' ').lower()}. Usable stock {av['usable_stock']}, 30-day forecast {av['forecast']['d30']}, lead time {av['effective_lead_days']} days, and suggested order {av['recommended_order_qty']}. Supplier: {part.supplier_name} ({round(part.supplier_reliability * 100)}% reliability). Linked assets: {linked}."}
+
+    if asset_match:
+        code = asset_match.group(1)
+        asset_row = db.scalar(select(Asset).where(Asset.asset_code == code))
+        if not asset_row:
+            return {"in_scope": True, "answer": f"I couldn't find asset {code} in the BrewSpare dataset."}
+        detail = asset_detail(db, asset_row)
+        linked_parts = ", ".join(f"{p['part_code']} {p['part_name']}" for p in detail["parts"]) or "none recorded"
+        return {"in_scope": True, "answer": f"{code} · {detail['name']} is {detail['status'].lower()} with health {detail['health_score']}% and risk {detail['risk_score']}%. Next maintenance is in {detail['next_maintenance_days']} days. Linked spare parts: {linked_parts}."}
+
+    if any(term in q for term in ("attention", "today", "critical", "highest risk")):
+        summary = plant_summary(db)
+        top = summary["critical_assets"][:3]
+        assets_text = "; ".join(f"{a['asset_code']} {a['name']} ({a['status'].lower()}, risk {a['risk_score']}%)" for a in top)
+        parts_text = "; ".join(f"{p['part_code']} {p['part_name']} (order {p['recommended_order_qty']})" for p in summary["parts_to_order"][:3]) or "no parts currently need ordering"
+        return {"in_scope": True, "answer": f"Highest-risk assets: {assets_text}. Procurement review: {parts_text}."}
+
+    if any(term in q for term in ("overstock", "slow-moving", "excess", "shelf life")):
+        rows = [availability_for(db, p) for p in db.scalars(select(SparePart)).all()]
+        excess = [p for p in rows if p["state"] in {"EXCESS_INVENTORY", "SHELF_LIFE_RISK"}]
+        text = "; ".join(f"{p['part_code']} ({p['state'].replace('_', ' ').lower()}, {p['usable_stock']} usable units, {p['months_cover']} months cover)" for p in excess)
+        return {"in_scope": True, "answer": f"Inventory flagged for review: {text or 'none in the current dataset'}."}
+
+    if "maintenance" in q or "work order" in q:
+        priorities = maintenance_priorities(db)[:4]
+        text = "; ".join(f"{a['asset_code']} {a['name']} (priority {a['priority_score']}, maintenance in {a['next_maintenance_days']} days)" for a in priorities)
+        return {"in_scope": True, "answer": f"Top maintenance priorities: {text}."}
+
+    if "scenario" in q or "delay" in q or "what if" in q or "production increase" in q:
+        delay_match = re.search(r"(\d+)\s*day", q)
+        increase_match = re.search(r"(\d+)\s*%", q)
+        result = scenario(supplier_delay_days=int(delay_match.group(1)) if delay_match else 15, production_increase_pct=int(increase_match.group(1)) if increase_match else 0, db=db)
+        affected = ", ".join(f"{p['part_code']} (+{p['projected_gap_days']} day gap)" for p in result["affected"][:4]) or "no additional parts projected with a gap"
+        return {"in_scope": True, "answer": f"With a {result['supplier_delay_days']}-day supplier delay and {result['production_increase_pct']}% production increase, {result['scenario_availability_risks']} parts are projected at availability risk. Affected: {affected}."}
+
+    if any(term in q for term in ("availability", "parts at risk", "spare parts", "parts to order", "supplier", "lead time", "stock", "inventory", "forecast", "order")):
+        rows = availability(db)
+        if "supplier" in q or "lead time" in q:
+            ranked = sorted(db.scalars(select(SparePart)).all(), key=lambda p: (p.supplier_reliability, -p.lead_time_days))[:4]
+            text = "; ".join(f"{p.part_code} {p.name} ({p.supplier_name}, {p.lead_time_days} days, {round(p.supplier_reliability * 100)}% reliable)" for p in ranked)
+            return {"in_scope": True, "answer": f"Lowest-reliability / longest-lead supplier exposures: {text}."}
+        urgent = [p for p in rows if p["state"] in {"AVAILABILITY_RISK", "ORDER_SOON"}][:5]
+        text = "; ".join(f"{p['part_code']} {p['part_name']} ({p['state'].replace('_', ' ').lower()}, stock {p['usable_stock']}, order {p['recommended_order_qty']})" for p in urgent)
+        return {"in_scope": True, "answer": f"Parts needing availability or order review: {text or 'none currently flagged'}."}
+
+    return {"in_scope": True, "answer": "I can answer using BrewSpare's asset, parts, inventory, supplier, maintenance, and scenario data. Ask about a specific asset or part code, current risks, parts to order, overstock, or maintenance priorities."}
+
+@app.get("/api/reports")
+def reports(db: Session = Depends(get_db)):
+    events = db.scalars(select(MaintenanceEvent).order_by(MaintenanceEvent.event_date.desc())).all()
+    assets = {a.id: a for a in db.scalars(select(Asset)).all()}
+    parts = db.scalars(select(SparePart)).all()
+    availability = [availability_for(db, p) for p in parts]
+    return {
+        "maintenance": {
+            "event_count": len(events),
+            "total_cost": round(sum(e.maintenance_cost for e in events), 2),
+            "downtime_hours": round(sum(e.downtime_hours for e in events), 1),
+            "by_asset": [{"asset_code": assets[e.asset_id].asset_code, "date": e.event_date.isoformat(), "problem": e.problem, "cost": e.maintenance_cost, "downtime_hours": e.downtime_hours} for e in events if e.asset_id in assets],
+        },
+        "inventory": {"inventory_value": round(sum(p["inventory_value"] for p in availability), 2), "annual_carrying_cost": round(sum(p["annual_carrying_cost"] for p in availability), 2)},
+        "availability_risks": [p for p in availability if p["state"] in {"AVAILABILITY_RISK", "ORDER_SOON"}],
+        "supplier_risks": sorted([{"part_code": p.part_code, "part_name": p.name, "supplier": p.supplier_name, "lead_time_days": p.lead_time_days, "reliability": p.supplier_reliability, "state": p.supplier_status} for p in parts], key=lambda p: (p["reliability"], -p["lead_time_days"])),
     }
