@@ -57,3 +57,9 @@ Then run `python -m app.seed` from `backend`.
 5. Scenario Simulator → model supplier delay and production increase.
 
 All plant, financial, maintenance, and sensor values are synthetic and intended for product demonstration only.
+
+## Deploying on Vercel
+
+The root `vercel.json` routes `/api/*` requests to the FastAPI service and all other requests to the Next.js frontend. Set `NEXT_PUBLIC_API_URL=/api` in the Vercel project environment for both Production and Preview.
+
+The bundled SQLite database is suitable for a read-only demo. Set `DATABASE_URL` to a PostgreSQL connection string in Vercel to persist settings and procurement records.
